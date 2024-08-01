@@ -3,9 +3,9 @@ use eframe::{
         ViewportBuilder,
         Context,
         CentralPanel,
-        SidePanel,
         Image,
         TopBottomPanel,
+        Key,
     },
     Result,
     run_native,
@@ -13,79 +13,116 @@ use eframe::{
     Frame
 };
 use std::fs;
+use rand::{thread_rng, seq::SliceRandom};
+
+const WINNER_URI: &str = "bytes://winner_image.jpg";
+const OTHER_URI: &str = "bytes://other_image.jpg";
 
 #[derive(Default)]
 struct ImageChooser {
-    path: Option<String>,
     images: Vec<fs::DirEntry>,
     winner: Option<fs::DirEntry>
 }
 
-const WINDOW_HEIGHT: f32 = 1440.0;
-const WINDOW_WIDTH: f32 = 810.0;
+
+fn load_image<'a>(entry: &'a fs::DirEntry, uri: &'a str) -> Image<'a> {
+    let image_bytes = fs::read(entry.path())
+        .expect("Couldn't open image");
+     return Image::from_bytes(uri.to_owned(), image_bytes)
+         .shrink_to_fit()
+}
 
 
+impl ImageChooser {
+    fn load_image_list(&mut self, path: String) {
+        let files = fs::read_dir(path).expect("Expected directory to work");
+        self.images = files
+            .map(|file_entry| file_entry.expect("Expected file"))
+            .filter(|file_entry| {
+                match file_entry.path().extension() {
+                    Some(extension) => extension == "jpg",
+                    None => false
+                }
+            })
+        .collect();
+
+        // Shuffle the files
+        self.images.shuffle(&mut thread_rng());
+
+        self.winner = self.images.pop();
+    }
+}
 impl eframe::App for ImageChooser {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
-        let file_picker = rfd::FileDialog::new();
-
-
-        // SidePanel
-        SidePanel::left("Main Menu").show(ctx, |ui| {
-            if ui.button("Choose images...").clicked() {
-                if let Some(path) = file_picker.pick_folder() {
-                    self.path = Some(path.display().to_string());
-                }
-            }
-
-            if let Some(path) = &self.path {
-                let files = fs::read_dir(path).expect("Expected directory to work");
-                self.images = files
-                    .map(|file_entry| file_entry.expect("Expected file"))
-                    .filter(|file_entry| {
-                        match file_entry.path().extension() {
-                            Some(extension) => extension == "jpg",
-                            None => false
-                        }
-                    })
-                    .collect();
-
-                self.winner = self.images.pop();
-            }
-
-        });
+        let screen_rect = ctx.input(|i| i.screen_rect());
+        // let height = screen_rect.max.y - screen_rect.min.y;
+        let width = screen_rect.max.x - screen_rect.min.x;
 
         // Status Bar
         TopBottomPanel::bottom("Status Bar").show(ctx, |ui| {
-            if self.images.len() > 0 {
-                ui.monospace(format!("Images ({})", self.images.len()));
-            }
-        });
-
-        // Central Panel
-        CentralPanel::default().show(ctx, |ui| {
-            if let Some(winner) = &self.winner {
-                ui.horizontal(|ui| {
-                    let winner_image_bytes = fs::read(winner.path()).expect("Couldn't open winner image");
-                    let winner_image = Image::from_bytes("bytes://winner_image", winner_image_bytes);
-                    ui.add_sized([WINDOW_WIDTH/3.0, WINDOW_HEIGHT/3.0], winner_image);
-
-                    if self.images.len() > 0 {
-                        let other_image_path = self.images.last().expect("Expected another image").path();
-                        let other_image_bytes = fs::read(other_image_path).expect("Couldn't open other image");
-                        let other_image = Image::from_bytes("bytes://other_image", other_image_bytes);
-                        ui.add_sized([WINDOW_WIDTH/3.0, WINDOW_HEIGHT/3.0], other_image);
+            ui.horizontal(|ui| {
+                /* ====== DIRECTORY PICKER ====== */
+                if ui.button("Choose images...").clicked() {
+                    let file_picker = rfd::FileDialog::new();
+                    if let Some(path) = file_picker.pick_folder() {
+                        self.load_image_list(path.display().to_string());
                     }
-                });
-            }
+                }
+                /* ============================== */
+                /* ===== LOADED IMAGES INFO ===== */
+                if self.images.len() > 0 {
+                    ui.monospace(format!("{} Image(s)", self.images.len()));
+                }
+                /* ============================== */
+            })
         });
+
+        CentralPanel::default().show(ctx, |ui| {
+            /* === IMAGE COMPARISON === */
+            if let Some(winner) = &self.winner {
+                let other_entry = self.images.last();
+                let half_width = ((width-25.0)/2.0).floor();
+
+                let winner_image = load_image(&winner, WINNER_URI).max_width(half_width);
+                ui.horizontal_centered(
+                    |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.label(&winner.path().display().to_string());
+                            ui.add(winner_image);
+                        });
+
+                        if let Some(other_entry) = other_entry {
+                            let other_image = load_image(&other_entry, OTHER_URI).max_width(half_width);
+                            ui.vertical_centered(|ui| {
+                                ui.label(&other_entry.path().display().to_string());
+                                ui.add(other_image);
+                            });
+                        }
+                    }
+                );
+            }
+            /* ======================== */
+            /* ===== KEYBOARD INPUTS ===== */
+            if ctx.input(|i| i.key_released(Key::ArrowLeft)) {
+                self.images.pop();
+                ui.ctx().forget_image(OTHER_URI);
+            } else if ctx.input(|i| i.key_released(Key::ArrowRight)) {
+                self.winner = self.images.pop();
+                ui.ctx().forget_image(WINNER_URI);
+                ui.ctx().forget_image(OTHER_URI);
+            }
+            /* =========================== */
+        });
+
+
     }
 }
 
 fn main() -> Result {
     let options = NativeOptions {
-        viewport: ViewportBuilder::default().with_inner_size([WINDOW_WIDTH, WINDOW_HEIGHT]),
-        ..Default::default()
+        viewport: ViewportBuilder::default()
+            .with_clamp_size_to_monitor_size(true)
+        ,..Default::default()
     };
 
 
