@@ -6,6 +6,7 @@ use eframe::{
         Image,
         TopBottomPanel,
         Key,
+        Ui
     },
     Result,
     run_native,
@@ -29,7 +30,18 @@ fn load_image<'a>(entry: &'a fs::DirEntry, uri: &'a str) -> Image<'a> {
     let image_bytes = fs::read(entry.path())
         .expect("Couldn't open image");
      return Image::from_bytes(uri.to_owned(), image_bytes)
-         .shrink_to_fit()
+}
+
+fn render_image<'a>(ui: &'a mut Ui, entry: &'a fs::DirEntry, uri: &'a str) {
+    ui.vertical(|ui| {
+        ui.label(entry.path().display().to_string());
+
+        let image = load_image(entry, uri)
+             .show_loading_spinner(true)
+             .shrink_to_fit();
+
+        ui.add(image);
+    });
 }
 
 
@@ -44,33 +56,30 @@ impl ImageChooser {
                     None => false
                 }
             })
-        .collect();
-
-        // Shuffle the files
+            .collect();
         self.images.shuffle(&mut thread_rng());
-
         self.winner = self.images.pop();
+    }
+    fn trigger_file_explorer(&mut self) {
+        let file_picker = rfd::FileDialog::new();
+        if let Some(path) = file_picker.pick_folder() {
+            self.load_image_list(path.display().to_string());
+        }
+
     }
 }
 impl eframe::App for ImageChooser {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
-        let screen_rect = ctx.input(|i| i.screen_rect());
-        // let height = screen_rect.max.y - screen_rect.min.y;
-        let width = screen_rect.max.x - screen_rect.min.x;
-
-        // Status Bar
+        // STATUS BAR
         TopBottomPanel::bottom("Status Bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 /* ====== DIRECTORY PICKER ====== */
                 if ui.button("Choose images...").clicked() {
-                    let file_picker = rfd::FileDialog::new();
-                    if let Some(path) = file_picker.pick_folder() {
-                        self.load_image_list(path.display().to_string());
-                    }
+                    self.trigger_file_explorer()
                 }
                 /* ============================== */
                 /* ===== LOADED IMAGES INFO ===== */
-                if self.images.len() > 0 {
+                if !self.images.is_empty() {
                     ui.monospace(format!("{} Image(s)", self.images.len()));
                 }
                 /* ============================== */
@@ -80,29 +89,24 @@ impl eframe::App for ImageChooser {
         CentralPanel::default().show(ctx, |ui| {
             /* === IMAGE COMPARISON === */
             if let Some(winner) = &self.winner {
+
                 let other_entry = self.images.last();
-                let half_width = ((width-25.0)/2.0).floor();
+                ui.horizontal(|mut ui| {
+                    // WINNER IMAGE
+                    render_image(&mut ui, winner, WINNER_URI);
 
-                let winner_image = load_image(&winner, WINNER_URI).max_width(half_width);
-                ui.horizontal_centered(
-                    |ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.label(&winner.path().display().to_string());
-                            ui.add(winner_image);
-                        });
-
-                        if let Some(other_entry) = other_entry {
-                            let other_image = load_image(&other_entry, OTHER_URI).max_width(half_width);
-                            ui.vertical_centered(|ui| {
-                                ui.label(&other_entry.path().display().to_string());
-                                ui.add(other_image);
-                            });
-                        }
+                    // OTHER IMAGE
+                    if let Some(other_entry) = other_entry {
+                        render_image(&mut ui, other_entry, OTHER_URI);
                     }
-                );
+                });
             }
             /* ======================== */
             /* ===== KEYBOARD INPUTS ===== */
+            if ctx.input(|i| i.key_released(Key::Enter)) && self.images.is_empty() {
+                self.trigger_file_explorer();
+
+            }
             if ctx.input(|i| i.key_released(Key::ArrowLeft)) {
                 self.images.pop();
                 ui.ctx().forget_image(OTHER_URI);
